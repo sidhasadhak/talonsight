@@ -31,6 +31,7 @@ dependencies = [
     "pandas>=2.0",
     "httpx>=0.25",
     "chromadb>=0.4",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

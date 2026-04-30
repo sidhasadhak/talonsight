@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import os
 import streamlit as st
 import pandas as pd
+from dotenv import load_dotenv
 
 from exasolchat.core import ExasolChat, QueryResult
 from exasolchat.connection import ConnectionConfig
 from exasolchat.llm import OllamaBackend, OpenAICompatibleBackend
 from exasolchat.rag import RAGMemory, NoopRAGMemory
 from exasolchat.safety import RiskLevel
+
+load_dotenv()
+
+_DEFAULT_DUCKDB_PATH = os.environ.get("EXASOLCHAT_DUCKDB_PATH", "")
+_DEFAULT_OLLAMA_URL  = os.environ.get("EXASOLCHAT_OLLAMA_URL", "http://localhost:11434")
+_DEFAULT_OLLAMA_MODEL = os.environ.get("EXASOLCHAT_OLLAMA_MODEL", "qwen2.5-coder:7b")
 
 
 # ── Page config ──────────────────────────────────────────────────────
@@ -153,10 +161,8 @@ with st.sidebar:
 
     # --- Connection ---
     st.markdown("#### Database")
-    conn_type = st.selectbox(
-        "Connection type",
-        ["Exasol (pyexasol)", "DuckDB", "SQLAlchemy URL"],
-    )
+    _conn_options = ["DuckDB", "Exasol (pyexasol)", "SQLAlchemy URL"]
+    conn_type = st.selectbox("Connection type", _conn_options)
 
     if conn_type == "Exasol (pyexasol)":
         exa_host = st.text_input("Host:Port", placeholder="exasoldb:8563")
@@ -166,11 +172,11 @@ with st.sidebar:
     elif conn_type == "DuckDB":
         duck_path = st.text_input(
             "Database path",
+            value=_DEFAULT_DUCKDB_PATH,
             placeholder="/path/to/data.duckdb or :memory:",
             help=(
                 "Path to a .duckdb file, or :memory: for in-memory.\n"
-                "DuckDB can also query Parquet/CSV files — create views "
-                "in your .duckdb file first."
+                "Set EXASOLCHAT_DUCKDB_PATH in a .env file to pre-fill this."
             ),
         )
         duck_schema = st.text_input("Schema", value="main", help="DuckDB schema (default: main)")
@@ -193,8 +199,8 @@ with st.sidebar:
     llm_type = st.selectbox("Backend", ["Ollama", "OpenAI-compatible API"])
 
     if llm_type == "Ollama":
-        ollama_url = st.text_input("Ollama URL", value="http://localhost:11434")
-        ollama_model = st.text_input("Model", value="llama3.1:8b")
+        ollama_url = st.text_input("Ollama URL", value=_DEFAULT_OLLAMA_URL)
+        ollama_model = st.text_input("Model", value=_DEFAULT_OLLAMA_MODEL)
     else:
         api_url = st.text_input("API URL", value="http://localhost:1234/v1")
         api_model = st.text_input("Model", value="local-model")
