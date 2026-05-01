@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "exachat"
-version = "0.2.0"
+version = "0.2.1"
 description = "Ask your database anything — safe text-to-SQL with local LLMs, RAG memory, and interactive charts."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -21,10 +21,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "pyexasol>=0.25",
     "duckdb>=0.10",
     "sqlalchemy>=2.0",
-    "sqlalchemy-exasol>=5.0",
     "streamlit>=1.30",
     "plotly>=5.18",
     "altair>=5.2",
@@ -35,10 +33,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+exasol   = ["pyexasol>=0.25", "sqlalchemy-exasol>=5.0"]
 postgres = ["psycopg2-binary>=2.9"]
-mysql = ["pymysql>=1.1"]
-all = ["psycopg2-binary>=2.9", "pymysql>=1.1"]
-dev = ["pytest>=7.0", "ruff>=0.1"]
+mysql    = ["pymysql>=1.1"]
+all      = ["pyexasol>=0.25", "sqlalchemy-exasol>=5.0", "psycopg2-binary>=2.9", "pymysql>=1.1"]
+dev      = ["pytest>=7.0", "ruff>=0.1"]
 
 [project.scripts]
 exachat = "exachat.cli:main"

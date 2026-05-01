@@ -9,7 +9,9 @@ Local LLMs only. No data leaves your machine. Works with DuckDB, Exasol, Postgre
 ## Install
 
 ```bash
-pip install exachat
+pip install exachat          # DuckDB, PostgreSQL, SQLite, MySQL
+pip install exachat[exasol]  # + Exasol (pyexasol + sqlalchemy-exasol)
+pip install exachat[all]     # everything
 ```
 
 ## How To: Zero to Querying in 5 Minutes
