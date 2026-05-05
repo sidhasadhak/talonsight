@@ -90,8 +90,9 @@ def render_builder(
         add_dim = st.selectbox("Dimension", unused_text, key="b_pick_dim")
 
     with r1c3:
-        unused_num = ["— add measure —"] + [c for c in num_cols if c not in active_measures]
-        add_meas = st.selectbox("Measure", unused_num, key="b_pick_meas")
+        # All columns are valid measures (COUNT DISTINCT works on VARCHAR too)
+        unused_all = ["— add measure —"] + [c for c in col_names if c not in active_measures]
+        add_meas = st.selectbox("Measure", unused_all, key="b_pick_meas")
 
     with r1c4:
         if metrics:
@@ -137,16 +138,16 @@ def render_builder(
         # MEASURES ──────────────────────────────────────────────────
         if cfg["measures"] or cfg["metric_names"]:
             st.markdown(
-                "**Measures** <span style='color:#6b7280;font-size:0.78rem'>— Aggregated numerics</span>",
+                "**Measures** <span style='color:#6b7280;font-size:0.78rem'>— Aggregated values (all column types)</span>",
                 unsafe_allow_html=True,
             )
             for i, m in enumerate(cfg["measures"]):
                 mc1, mc2, mc3, mc4 = st.columns([3, 2, 3, 1])
                 with mc1:
-                    opts = num_cols if num_cols else col_names
-                    f_idx = opts.index(m["field"]) if m["field"] in opts else 0
+                    # All columns available — COUNT DISTINCT works on any type
+                    f_idx = col_names.index(m["field"]) if m["field"] in col_names else 0
                     cfg["measures"][i]["field"] = st.selectbox(
-                        "Field", opts, index=f_idx,
+                        "Field", col_names, index=f_idx,
                         key=f"mf_{i}", label_visibility="collapsed",
                     )
                 with mc2:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
@@ -545,8 +546,14 @@ with tab_ask:
 
         with st.chat_message("assistant"):
             with st.spinner("Generating SQL..."):
+                _t0 = time.perf_counter()
                 result = chat_engine.ask(question)
+                _elapsed = time.perf_counter() - _t0
             _render_result(result)
+            st.markdown(
+                f'<div style="font-size:0.7rem;color:#4b5563;margin-top:6px;">⏱ {_elapsed:.1f}s</div>',
+                unsafe_allow_html=True,
+            )
 
         st.session_state.messages.append({"role": "assistant", "result": result})
 
