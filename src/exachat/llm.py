@@ -193,6 +193,26 @@ Use "table_only" if the data isn't well-suited for charting (e.g., single row, t
 
         return text.strip()
 
+    def _clean_response(self, text: str) -> str:
+        """Strip XML-like tags (<reasoning>, <sql>, <chart>, etc.) from model output."""
+        text = re.sub(r"<reasoning>.*?</reasoning>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<sql>.*?</sql>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<chart>.*?</chart>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<[a-zA-Z_]+>.*?</[a-zA-Z_]+>", "", text, flags=re.DOTALL)
+        return text.strip()
+
+    def _extract_explanation(self, raw: str) -> str:
+        """Extract the human-readable explanation from a generate_sql response."""
+        # For <sql> tag format: take text after </sql>, strip other tags
+        if "</sql>" in raw:
+            after = raw.split("</sql>", 1)[-1]
+            return self._clean_response(after)
+        # For ```sql block format: take text after the closing ```
+        if "```" in raw:
+            after = raw.split("```")[-1]
+            return self._clean_response(after)
+        return ""
+
     def _extract_json_list(self, text: str) -> list[str]:
         """Extract a JSON string array from LLM output."""
         try:
@@ -242,11 +262,12 @@ class OllamaBackend(LLMBackend):
         prompt = self._build_sql_prompt(schema_prompt, question, kb_context, history)
         raw = self._chat(prompt)
         sql = self._extract_sql(raw)
-        explanation = raw.split("```")[-1].strip() if "```" in raw else ""
+        explanation = self._extract_explanation(raw)
         return LLMResponse(sql=sql, explanation=explanation, raw=raw)
 
     def generate_summary(self, question: str, sql: str, data_preview: str) -> str:
-        return self._chat(self._build_summary_prompt(question, sql, data_preview), 0.3)
+        raw = self._chat(self._build_summary_prompt(question, sql, data_preview), 0.3)
+        return self._clean_response(raw)
 
     def suggest_chart(self, question: str, columns: list[str], row_count: int) -> dict:
         raw = self._chat(self._build_chart_prompt(question, columns, row_count), 0.0)
@@ -301,11 +322,12 @@ class OpenAICompatibleBackend(LLMBackend):
         prompt = self._build_sql_prompt(schema_prompt, question, kb_context, history)
         raw = self._chat(prompt)
         sql = self._extract_sql(raw)
-        explanation = raw.split("```")[-1].strip() if "```" in raw else ""
+        explanation = self._extract_explanation(raw)
         return LLMResponse(sql=sql, explanation=explanation, raw=raw)
 
     def generate_summary(self, question: str, sql: str, data_preview: str) -> str:
-        return self._chat(self._build_summary_prompt(question, sql, data_preview), 0.3)
+        raw = self._chat(self._build_summary_prompt(question, sql, data_preview), 0.3)
+        return self._clean_response(raw)
 
     def suggest_chart(self, question: str, columns: list[str], row_count: int) -> dict:
         raw = self._chat(self._build_chart_prompt(question, columns, row_count), 0.0)
