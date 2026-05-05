@@ -92,6 +92,32 @@ st.markdown("""
 
     .stButton > button[kind="primary"] { background: #f97316; border: none; }
     .stButton > button[kind="primary"]:hover { background: #ea6c0a; }
+
+    /* Tab labels — make them clearly visible */
+    [data-testid="stTabs"] [data-baseweb="tab-list"] {
+        gap: 4px;
+        border-bottom: 1px solid #2d2d2d;
+    }
+    [data-testid="stTabs"] [data-baseweb="tab"] {
+        color: #9ca3af !important;
+        font-size: 0.92rem !important;
+        font-weight: 500 !important;
+        padding: 8px 20px !important;
+        border-radius: 6px 6px 0 0 !important;
+        background: transparent !important;
+    }
+    [data-testid="stTabs"] [data-baseweb="tab"]:hover {
+        color: #e8e8e8 !important;
+        background: rgba(255,255,255,0.05) !important;
+    }
+    [data-testid="stTabs"] [aria-selected="true"] {
+        color: #f97316 !important;
+        border-bottom: 2px solid #f97316 !important;
+        background: transparent !important;
+    }
+    [data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+        background-color: #f97316 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
