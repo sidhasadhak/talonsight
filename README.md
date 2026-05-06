@@ -4,7 +4,7 @@
 
 Local LLMs only. No data leaves your machine. Works with DuckDB, Exasol, PostgreSQL, MySQL, SQLite, and anything SQLAlchemy supports.
 
-![Ask tab — query result with bar chart](docs/images/screenshot-ask.png)
+![Ask tab — query result with interactive bar chart](docs/images/screenshot-ask.png)
 
 ---
 
@@ -71,7 +71,7 @@ The sidebar keeps the most important controls above the fold:
 
 Advanced settings — LLM backend, Knowledge Base path, Metrics directory, and Options — are in collapsed expanders below the buttons.
 
-![Connected sidebar and starter questions](docs/images/screenshot-connected.png)
+![Compact sidebar and auto-generated starter questions](docs/images/screenshot-connected.png)
 
 After connecting, exachat generates 5 starter questions based on your actual schema and data profile.
 
@@ -109,7 +109,9 @@ Pick a table, add dimensions (GROUP BY columns) and measures (aggregated columns
 
 The builder generates clean, schema-qualified SQL and renders the same interactive chart + table as the Ask tab. Dimensions can be reordered with ↑↓ buttons. Great for ad-hoc exploration without writing SQL.
 
-![Visual Query Builder](docs/images/screenshot-build.png)
+![Visual Query Builder — field configuration](docs/images/screenshot-build-config.png)
+
+![Visual Query Builder — results with chart and data table](docs/images/screenshot-build-result.png)
 
 ### 📐 Metrics — Saved KPIs
 
@@ -119,7 +121,7 @@ Define a metric once (name + SQL or question), save it to the Metrics Catalog, a
 
 Auto-generated entity-relationship diagram using Mermaid.js. Tables show all column names and their SQL data types. Solid lines indicate exact column-name join paths; dashed lines indicate fuzzy root matches (e.g. `order_id` ↔ `order_id_pseudonyms`). Tables with no detected join path are shown in isolation.
 
-![Schema Relationship Map](docs/images/screenshot-schema.png)
+![Schema Relationship Map — auto-generated Mermaid ER diagram](docs/images/screenshot-schema.png)
 
 ---
 
