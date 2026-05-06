@@ -137,7 +137,7 @@ This SQL was executed:
 Results (first rows):
 {data_preview}
 
-Write a concise natural-language summary. Be specific with numbers. 2-3 sentences max."""
+Write a concise plain-text summary. Rules: no markdown, no bold (**), no italics (*), no backticks (`), no bullet points. Be specific with numbers. 2-3 sentences max."""
 
     def _build_followups_prompt(self, question: str, sql: str, data_preview: str) -> str:
         return f"""A business analyst asked: "{question}"

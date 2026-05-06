@@ -67,6 +67,150 @@ class TableInfo:
     comment: Optional[str] = None
 
 
+# ── Join-key inference ────────────────────────────────────────────────
+
+# Suffixes stripped when normalising column names for join detection.
+# Listed longest-first so greedy stripping is correct.
+_JOIN_SUFFIXES = (
+    "identifier", "number", "pseudonym", "pseudonyms",
+    "code", "num", "key", "id", "no",
+)
+
+
+def _normalise_for_join(name: str) -> str:
+    """Collapse a column name to its semantic root for join matching.
+
+    "customer_id"         → "customer"
+    "cust_id"             → "cust"
+    "order_id"            → "order"
+    "orderid"             → "order"
+    "order_id_pseudonyms" → "order"
+    """
+    n = re.sub(r"[\s_]+", "", name.lower())
+    # Strip compound suffixes iteratively (e.g. _id_pseudonyms → _id → root)
+    for _ in range(4):
+        stripped = False
+        for suf in _JOIN_SUFFIXES:
+            if n.endswith(suf) and len(n) > len(suf) + 2:
+                n = n[: -len(suf)]
+                stripped = True
+                break
+        if not stripped:
+            break
+    return n
+
+
+def get_join_map(tables: list["TableInfo"]) -> dict:
+    """Analyse column overlap across tables and return structured join data.
+
+    Returns::
+        {
+          "joins":    [{"t1", "c1", "t2", "c2", "match"}, ...],
+          "no_join":  [(t1_name, t2_name), ...]   # pairs with NO shared column
+        }
+
+    Phase 1 — exact: identical column name in ≥ 2 tables.
+    Phase 2 — fuzzy: different column names with the same normalised root.
+    """
+    if len(tables) < 2:
+        return {"joins": [], "no_join": []}
+
+    exact_map: dict[str, list[str]] = {}
+    fuzzy_map: dict[str, list[tuple[str, str]]] = {}
+
+    for t in tables:
+        for c in t.columns:
+            exact_map.setdefault(c.name, []).append(t.name)
+            root = _normalise_for_join(c.name)
+            if len(root) > 2:
+                fuzzy_map.setdefault(root, []).append((t.name, c.name))
+
+    joins: list[dict] = []
+    seen_col_pairs: set[frozenset] = set()
+    joined_table_pairs: set[frozenset] = set()
+
+    # Phase 1
+    for col, tbls in exact_map.items():
+        unique = list(dict.fromkeys(tbls))
+        if len(unique) < 2:
+            continue
+        for i, t1 in enumerate(unique):
+            for t2 in unique[i + 1:]:
+                pair = frozenset({f"{t1}.{col}", f"{t2}.{col}"})
+                if pair not in seen_col_pairs:
+                    seen_col_pairs.add(pair)
+                    joined_table_pairs.add(frozenset({t1, t2}))
+                    joins.append({"t1": t1, "c1": col, "t2": t2, "c2": col, "match": "exact"})
+
+    # Phase 2
+    for root, occurrences in fuzzy_map.items():
+        per_table: dict[str, str] = {}
+        for tbl, col in occurrences:
+            if tbl not in per_table:
+                per_table[tbl] = col
+        unique_tables = list(per_table)
+        if len(unique_tables) < 2:
+            continue
+        for i, t1 in enumerate(unique_tables):
+            for t2 in unique_tables[i + 1:]:
+                c1, c2 = per_table[t1], per_table[t2]
+                if c1 == c2:
+                    continue
+                pair = frozenset({f"{t1}.{c1}", f"{t2}.{c2}"})
+                if pair not in seen_col_pairs:
+                    seen_col_pairs.add(pair)
+                    joined_table_pairs.add(frozenset({t1, t2}))
+                    joins.append({"t1": t1, "c1": c1, "t2": t2, "c2": c2,
+                                  "match": f"similar (root '{root}')"})
+
+    # Pairs with NO detected direct join path
+    table_names = [t.name for t in tables]
+    no_join = [
+        (t1, t2)
+        for i, t1 in enumerate(table_names)
+        for t2 in table_names[i + 1:]
+        if frozenset({t1, t2}) not in joined_table_pairs
+    ]
+
+    return {"joins": joins, "no_join": no_join}
+
+
+def _infer_join_hints(tables: list["TableInfo"]) -> str:
+    """Format the join map as a prompt block for the LLM.
+
+    Critically includes a 'NO DIRECT JOIN' section so the LLM does not
+    hallucinate column names to connect tables that have no shared key.
+    """
+    jmap = get_join_map(tables)
+    if not jmap["joins"] and not jmap["no_join"]:
+        return ""
+
+    lines: list[str] = []
+
+    if jmap["joins"]:
+        lines.append("DETECTED JOIN PATHS (use these ON / USING clauses):")
+        for j in jmap["joins"]:
+            if j["c1"] == j["c2"]:
+                lines.append(f"  {j['t1']}.{j['c1']} = {j['t2']}.{j['c2']}  [{j['match']}]")
+            else:
+                lines.append(
+                    f"  {j['t1']}.{j['c1']} = {j['t2']}.{j['c2']}"
+                    f"  [{j['match']}]"
+                )
+
+    if jmap["no_join"]:
+        lines.append(
+            "\nNO DIRECT JOIN DETECTED — do NOT attempt to join these pairs "
+            "(no shared column exists):"
+        )
+        for t1, t2 in jmap["no_join"]:
+            lines.append(
+                f"  {t1} ↔ {t2}  → an intermediate table is required"
+            )
+
+    return "\n".join(lines)
+
+
 @dataclass
 class SchemaContext:
     tables: list[TableInfo]
@@ -101,6 +245,12 @@ class SchemaContext:
                 for col, vals in t.sample_values.items():
                     display = ", ".join(repr(v) for v in vals[:5])
                     lines.append(f"    {col}: [{display}]")
+            lines.append("")
+
+        # Auto-detected join candidates help the LLM pick correct ON clauses
+        join_hints = _infer_join_hints(self.tables)
+        if join_hints:
+            lines.append(join_hints)
             lines.append("")
 
         if self.extra_context:

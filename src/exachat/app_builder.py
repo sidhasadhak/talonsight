@@ -126,11 +126,25 @@ def render_builder(
             unsafe_allow_html=True,
         )
         if cfg["dimensions"]:
-            tag_cols = st.columns(min(len(cfg["dimensions"]), 6))
             for i, dim in enumerate(cfg["dimensions"]):
-                with tag_cols[i % 6]:
-                    if st.button(f"✕ {dim}", key=f"rd_{dim}", help="Remove"):
-                        cfg["dimensions"].remove(dim)
+                _dc1, _dc2, _dc3, _dc4 = st.columns([5, 1, 1, 1])
+                with _dc1:
+                    st.markdown(f"`{dim}`")
+                with _dc2:
+                    if i > 0 and st.button("↑", key=f"dup_{i}", help="Move up"):
+                        cfg["dimensions"][i - 1], cfg["dimensions"][i] = (
+                            cfg["dimensions"][i], cfg["dimensions"][i - 1]
+                        )
+                        st.rerun()
+                with _dc3:
+                    if i < len(cfg["dimensions"]) - 1 and st.button("↓", key=f"ddn_{i}", help="Move down"):
+                        cfg["dimensions"][i], cfg["dimensions"][i + 1] = (
+                            cfg["dimensions"][i + 1], cfg["dimensions"][i]
+                        )
+                        st.rerun()
+                with _dc4:
+                    if st.button("✕", key=f"rdim_{i}", help="Remove"):
+                        cfg["dimensions"].pop(i)
                         st.rerun()
         else:
             st.caption("None — pick a dimension above.")
@@ -272,20 +286,67 @@ def render_builder(
 
         df = res["df"]
         if len(df) > 0:
-            try:
-                dim_names     = cfg["dimensions"]
-                measure_names = [m["alias"] for m in cfg["measures"]] + cfg["metric_names"]
-                hint = f"Dimensions: {dim_names}, Measures: {measure_names}"
-                chart_config = chat.llm.suggest_chart(hint, list(df.columns), len(df))
-                chart_obj    = auto_chart(df, chart_config, chat.chart_library)
-                if chart_obj:
-                    lib, chart = chart_obj
-                    if lib == "plotly":
-                        st.plotly_chart(chart, use_container_width=True)
-                    elif lib == "altair":
-                        st.altair_chart(chart, use_container_width=True)
-            except Exception:
-                pass
+            num_cols_b = df.select_dtypes(include="number").columns.tolist()
+            dim_cols_b = df.select_dtypes(exclude="number").columns.tolist()
+            all_cols_b = list(df.columns)
+
+            # ── Interactive viz controls ──────────────────────────
+            bvc1, bvc2, bvc3 = st.columns([2, 2, 4])
+            with bvc1:
+                b_viz = st.selectbox(
+                    "Chart type",
+                    ["auto", "bar", "line", "area", "scatter", "pie", "table only"],
+                    key="b_viz_type",
+                    label_visibility="collapsed",
+                    help="Chart type for results",
+                )
+            with bvc2:
+                _xax_opts = dim_cols_b or all_cols_b
+                if _xax_opts:
+                    b_xax = st.selectbox(
+                        "X axis",
+                        _xax_opts,
+                        key="b_xax",
+                        label_visibility="collapsed",
+                        help="Column to use on the X axis",
+                    )
+                else:
+                    b_xax = None
+            with bvc3:
+                _meas_opts = num_cols_b or all_cols_b
+                if len(_meas_opts) > 1:
+                    b_measures = st.multiselect(
+                        "Measures",
+                        _meas_opts,
+                        default=_meas_opts,
+                        key="b_measures",
+                        label_visibility="collapsed",
+                        help="Which columns to plot as measures",
+                    )
+                else:
+                    b_measures = _meas_opts
+
+            # ── Chart render ──────────────────────────────────────
+            if b_viz != "table only" and b_measures and b_xax:
+                try:
+                    import plotly.express as px
+                    _ct = b_viz if b_viz != "auto" else "bar"
+                    _y = b_measures[0] if len(b_measures) == 1 else b_measures
+                    if _ct == "line":
+                        _fig = px.line(df, x=b_xax, y=_y)
+                    elif _ct == "area":
+                        _fig = px.area(df, x=b_xax, y=_y)
+                    elif _ct == "scatter":
+                        _fig = px.scatter(df, x=b_xax, y=b_measures[0])
+                    elif _ct == "pie" and len(b_measures) == 1:
+                        _fig = px.pie(df, names=b_xax, values=b_measures[0])
+                    else:
+                        _bm = "group" if len(b_measures) > 1 else "relative"
+                        _fig = px.bar(df, x=b_xax, y=_y, barmode=_bm)
+                    _fig.update_layout(margin=dict(t=30, b=0), legend_title_text="")
+                    st.plotly_chart(_fig, use_container_width=True)
+                except Exception:
+                    pass
 
             st.dataframe(df, use_container_width=True, height=min(400, 35 * len(df) + 50))
 

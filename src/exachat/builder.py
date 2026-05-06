@@ -123,7 +123,13 @@ class QueryBuilder:
 
         lines = ["SELECT"]
         lines.append(",\n".join(select_parts))
-        lines.append(f"FROM\n    {table}")
+        # Qualify table name with its schema to avoid "table not found" errors
+        _tinfo = self._tables.get(table)
+        if _tinfo and _tinfo.schema:
+            _qualified = f'"{_tinfo.schema}"."{table}"'
+        else:
+            _qualified = f'"{table}"'
+        lines.append(f"FROM\n    {_qualified}")
 
         # WHERE
         valid_filters = [

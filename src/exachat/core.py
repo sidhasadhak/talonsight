@@ -181,6 +181,14 @@ class ExasolChat:
         if self.metrics_catalog and self.metrics_catalog.count > 0:
             schema_prompt += "\n\n" + self.metrics_catalog.format_for_prompt()
 
+        # Reinforce access control so the LLM doesn't hallucinate unauthorised tables
+        if self._allowed_tables:
+            schema_prompt += (
+                "\n\nACCESS CONTROL — CRITICAL: You may ONLY reference these tables: "
+                + ", ".join(sorted(self._allowed_tables))
+                + ". Never use any other table in your SQL, even if the question implies one."
+            )
+
         try:
             llm_resp: LLMResponse = self.llm.generate_sql(
                 schema_prompt, question, kb_context,
