@@ -481,25 +481,97 @@ def _pg_fix_timestamp_casts(sql: str) -> str:
     return sql
 
 
+_SQL_KEYWORDS = frozenset({
+    "SELECT", "FROM", "WHERE", "JOIN", "ON", "AND", "OR", "NOT", "IN", "IS",
+    "GROUP", "BY", "ORDER", "HAVING", "LIMIT", "OFFSET", "AS", "WITH",
+    "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "NATURAL",
+    "UNION", "INTERSECT", "EXCEPT", "ALL", "DISTINCT", "EXISTS",
+    "CASE", "WHEN", "THEN", "ELSE", "END", "BETWEEN", "LIKE", "ILIKE",
+    "NULL", "TRUE", "FALSE", "ASC", "DESC", "NULLS", "FIRST", "LAST",
+    "OVER", "PARTITION", "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE",
+    "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "ROWS", "RANGE",
+    "UNBOUNDED", "PRECEDING", "FOLLOWING", "CURRENT", "ROW",
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "STDDEV", "VARIANCE",
+    "COALESCE", "NULLIF", "CAST", "TRY_CAST", "EXTRACT", "DATE_TRUNC",
+    "DATE_DIFF", "DATE_PART", "INTERVAL", "DATE", "TIMESTAMP", "TIME",
+    "CONCAT", "TRIM", "LOWER", "UPPER", "LENGTH", "REPLACE", "SUBSTR",
+    "GENERATE_SERIES", "UNNEST", "FILTER", "WITHIN", "PERCENTILE_CONT",
+    "PERCENTILE_DISC", "QUALIFY", "PIVOT", "UNPIVOT", "INSERT", "UPDATE",
+    "DELETE", "CREATE", "DROP", "ALTER", "TABLE", "VIEW", "INDEX",
+    "RETURNING", "SET", "VALUES", "INTO", "PRIMARY", "FOREIGN", "KEY",
+    "REFERENCES", "CONSTRAINT", "UNIQUE", "CHECK", "DEFAULT",
+})
+
+
 def _check_column_ambiguity(sql: str, schema: "SchemaContext") -> list[str]:
-    """Detect column names in SQL that fuzzy-match schema columns but don't match exactly."""
-    all_cols = {c.name for t in schema.tables for c in t.columns}
-    norm_to_exact: dict[str, str] = {_normalise(c): c for c in all_cols}
+    """Warn about:
+    1. Unqualified columns that exist in 2+ tables referenced by the query
+       (these cause 'column is ambiguous' errors at runtime).
+    2. Column names used in SQL that fuzzy-match schema columns but differ in case/spelling.
+    """
+    warnings: list[str] = []
 
-    tokens = set(re.findall(r'"([^"]+)"|([A-Za-z_]\w*)', sql))
-    used_names = {q or u for q, u in tokens if (q or u)}
+    # ── Build per-table column maps ──────────────────────────────────────────
+    # col_name (lower) → set of table names that own it
+    col_to_tables: dict[str, set[str]] = {}
+    for t in schema.tables:
+        for c in t.columns:
+            col_to_tables.setdefault(c.name.lower(), set()).add(t.name)
 
-    warnings = []
-    for name in used_names:
-        if name.upper() in ("SELECT", "FROM", "WHERE", "JOIN", "ON", "AND", "OR",
-                            "GROUP", "BY", "ORDER", "HAVING", "LIMIT", "AS",
-                            "WITH", "INNER", "LEFT", "RIGHT", "OUTER", "COUNT",
-                            "SUM", "AVG", "MIN", "MAX", "DISTINCT", "NULL", "NOT",
-                            "IN", "LIKE", "CASE", "WHEN", "THEN", "ELSE", "END",
-                            "OVER", "PARTITION", "ROW_NUMBER", "RANK", "ALL",
-                            "CAST", "INTERVAL", "DATE", "TIMESTAMP", "TRUE", "FALSE"):
+    all_col_names = {c.name for t in schema.tables for c in t.columns}
+    norm_to_exact: dict[str, str] = {_normalise(c): c for c in all_col_names}
+
+    # ── Find tables referenced in this query (simple heuristic) ─────────────
+    table_names_lower = {t.name.lower() for t in schema.tables}
+    sql_upper = sql.upper()
+    referenced_tables: set[str] = set()
+    for t in schema.tables:
+        # Match table name appearing after FROM / JOIN keyword
+        if re.search(
+            r'\b(?:FROM|JOIN)\s+' + re.escape(t.name),
+            sql,
+            re.IGNORECASE,
+        ):
+            referenced_tables.add(t.name)
+
+    has_join = bool(re.search(r'\bJOIN\b', sql, re.IGNORECASE))
+
+    # ── Tokenise SQL to find bare (unqualified) identifiers ─────────────────
+    # Qualified: alias.col or table.col — skip these entirely
+    qualified = {m.group(2).lower() for m in re.finditer(
+        r'\b([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)', sql
+    )}
+
+    tokens = re.findall(r'"([^"]+)"|\'([^\']+)\'|([A-Za-z_]\w*)', sql)
+    used_bare: set[str] = set()
+    for q1, q2, bare in tokens:
+        name = q1 or q2 or bare
+        if not name:
             continue
-        if name in all_cols:
+        if name.upper() in _SQL_KEYWORDS:
+            continue
+        if name.lower() in table_names_lower:
+            continue  # it's a table name, not a column
+        if name.lower() in qualified:
+            continue  # already qualified elsewhere — skip
+        used_bare.add(name)
+
+    # ── Check 1: ambiguous columns (exist in 2+ referenced tables) ──────────
+    if has_join and referenced_tables:
+        for name in used_bare:
+            tables_with_col = col_to_tables.get(name.lower(), set())
+            # Only flag if the column appears in 2+ of the REFERENCED tables
+            colliding = tables_with_col & referenced_tables
+            if len(colliding) >= 2:
+                warnings.append(
+                    f"⚠️ Column **'{name}'** exists in multiple joined tables "
+                    f"({', '.join(sorted(colliding))}) — qualify it as "
+                    f"e.g. **`{sorted(colliding)[0]}.{name}`** to avoid an ambiguity error."
+                )
+
+    # ── Check 2: fuzzy-match misspellings ────────────────────────────────────
+    for name in used_bare:
+        if name in all_col_names:
             continue
         norm = _normalise(name)
         if norm in norm_to_exact:
@@ -508,4 +580,5 @@ def _check_column_ambiguity(sql: str, schema: "SchemaContext") -> list[str]:
                 warnings.append(
                     f"⚠️ Column **'{name}'** not found — did you mean **'{exact}'**?"
                 )
+
     return warnings

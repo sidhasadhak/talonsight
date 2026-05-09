@@ -146,6 +146,7 @@ RULES:
 - If the question is a follow-up (e.g. "add actual numbers", "also show X", "filter by Y"), modify the most recent SQL from conversation history to address it.
 - Use appropriate aggregations, JOINs, filtering, and window functions.
 - Alias columns for human readability.
+- ALWAYS qualify column names with their table name or alias when the query contains any JOIN (e.g. orders.order_id, not just order_id). Ambiguous unqualified column references cause "column is ambiguous" errors at runtime.
 SQL FORMATTING (important):
 - Put each clause on its own line: SELECT, FROM, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT.
 - Indent column lists and conditions with 4 spaces.
