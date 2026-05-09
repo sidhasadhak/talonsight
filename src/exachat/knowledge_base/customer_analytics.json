@@ -155,5 +155,35 @@
       "including new logo revenue in NRR — NRR measures only what happened to the prior period's cohort; new customers are excluded"
     ],
     "related_patterns": ["ca_ltv_cac", "ca_segment_migration"]
+  },
+  {
+    "id": "ca_customer_deduplication",
+    "title": "Customer deduplication: customer_unique_id vs customer_id",
+    "intent_tags": [
+      "customer deduplication", "customer_unique_id", "one customer multiple ids",
+      "real customer identity", "deduplicate customers", "customer id per order",
+      "olist customer id", "same person different id", "customer identity resolution",
+      "repeat customer not detected", "inflated customer count", "customer_id vs unique_id"
+    ],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "correctness",
+    "template": "-- Always join customers table to resolve the true unique customer identifier\n-- before computing retention, LTV, cohort, or repeat-purchase metrics.\nWITH true_customers AS (\n    SELECT\n        c.customer_unique_id,          -- the real person\n        c.customer_state,\n        o.order_id,\n        o.order_purchase_timestamp\n    FROM customers c\n    JOIN orders o ON c.customer_id = o.customer_id\n    WHERE o.order_status NOT IN ('canceled', 'unavailable')\n)\nSELECT customer_unique_id, COUNT(DISTINCT order_id) AS total_orders\nFROM true_customers\nGROUP BY customer_unique_id\nHAVING COUNT(DISTINCT order_id) > 1   -- true repeat customers",
+    "when_to_use": [
+      "any metric involving repeat customers, retention, cohorts, or LTV on datasets where one real person can have multiple customer_id values",
+      "Olist e-commerce dataset: a new customer_id is assigned per order to the same real person — use customer_unique_id for all person-level analysis",
+      "detecting repeat purchases: COUNT(DISTINCT order_id) per customer_unique_id, not per customer_id",
+      "cohort analysis: cohort month = MIN(order date) per customer_unique_id across all their customer_ids"
+    ],
+    "anti_patterns": [
+      "computing repeat purchase rate on customer_id — each order creates a new customer_id in some schemas; every customer appears to be a first-time buyer, making repeat rate = 0%",
+      "computing cohort retention on customer_id — a customer's second order appears as a new first-time customer in a later cohort, inflating cohort sizes and collapsing retention curves",
+      "COUNT(DISTINCT customer_id) for 'unique customers' — overcounts when one person has multiple IDs; always join to the customer dimension table and use the unique/deduplicated key"
+    ],
+    "notes": [
+      "In Olist: customers.customer_unique_id is the true person; customers.customer_id is order-scoped. One person can have 2-3 customer_id values.",
+      "General rule: whenever a transactional system generates a new account-like key per transaction (to anonymize or prevent tracking), find the stable person-level identifier before doing any customer analytics."
+    ],
+    "related_patterns": ["adv_cohort_retention_pivot", "ca_churn_features", "ca_nrr"]
   }
 ]
