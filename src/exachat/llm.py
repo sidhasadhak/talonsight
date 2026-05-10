@@ -7,12 +7,20 @@ and Apple Silicon MLX-LM server.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import subprocess
+import sys
+import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -442,13 +450,9 @@ class MLXBackend(OpenAICompatibleBackend):
     OpenAI-compatible HTTP server, so this backend is a thin wrapper around
     OpenAICompatibleBackend with MLX-appropriate defaults.
 
-    Setup (one-time):
-        pip install exachat[mlx]
-
-    Start server before connecting exachat:
-        python3 -m mlx_lm server \\
-            --model mlx-community/Qwen3-8B-4bit \\
-            --port 8080
+    The server is started automatically on demand — no manual terminal command
+    needed. If the server is not running when a query is made, this backend
+    will spawn it, wait for it to load the model into memory, and then proceed.
 
     Any model from the mlx-community HuggingFace organisation works, e.g.:
         mlx-community/Qwen3-8B-4bit                      (default, ~5 GB)
@@ -462,6 +466,8 @@ class MLXBackend(OpenAICompatibleBackend):
     """
 
     _backend_name: str = "MLX"
+    # One start attempt at a time across all instances (class-level lock)
+    _start_lock: threading.Lock = threading.Lock()
 
     def __init__(
         self,
@@ -471,27 +477,85 @@ class MLXBackend(OpenAICompatibleBackend):
         timeout: float = 180.0,
     ):
         super().__init__(base_url=base_url, model=model, api_key=api_key, timeout=timeout)
+        self._proc: Optional[subprocess.Popen] = None
+
+    # ── Server lifecycle ──────────────────────────────────────────────
+
+    def _port(self) -> int:
+        try:
+            return urlparse(self.base_url).port or 8080
+        except Exception:
+            return 8080
+
+    def _is_up(self, timeout: float = 2.0) -> bool:
+        try:
+            httpx.get(f"{self.base_url}/models", timeout=timeout)
+            return True
+        except Exception:
+            return False
+
+    def _start_and_wait(self, wait_secs: int = 180) -> bool:
+        """Ensure the MLX server is running, starting it if needed.
+
+        Blocks until the server responds or *wait_secs* elapses.
+        Returns True when the server is reachable.
+        Uses a class-level lock so only one spawn attempt runs at a time.
+        """
+        with self.__class__._start_lock:
+            # Fast path — already up (maybe started by cli.py or another thread)
+            if self._is_up():
+                return True
+
+            port = self._port()
+            logger.info("MLX server not running — spawning on port %d …", port)
+
+            try:
+                self._proc = subprocess.Popen(
+                    [sys.executable, "-m", "mlx_lm", "server",
+                     "--model", self.model, "--port", str(port)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as exc:
+                logger.warning("Could not spawn MLX server: %s", exc)
+                return False
+
+            deadline = time.time() + wait_secs
+            while time.time() < deadline:
+                # Process died unexpectedly
+                if self._proc.poll() is not None:
+                    logger.warning("MLX server process exited early (rc=%s)", self._proc.returncode)
+                    return False
+                if self._is_up(timeout=1.5):
+                    logger.info("MLX server ready at %s", self.base_url)
+                    return True
+                time.sleep(1)
+
+            logger.warning("MLX server did not become ready within %ds", wait_secs)
+            return False
+
+    # ── LLM protocol ─────────────────────────────────────────────────
 
     def ping(self) -> tuple[bool, str]:
-        try:
-            httpx.get(f"{self.base_url}/models", timeout=3.0)
+        if self._is_up():
             return True, f"MLX server reachable ({self.model})"
-        except httpx.ConnectError:
-            return (
-                False,
-                f"MLX server not running at {self.base_url}.\n"
-                f"Start it with:\n"
-                f"  python3 -m mlx_lm server --model {self.model} --port 8080",
-            )
-        except Exception as e:
-            return False, str(e)
+        # Try auto-starting before reporting failure
+        if self._start_and_wait():
+            return True, f"MLX server started automatically ({self.model})"
+        return (
+            False,
+            f"MLX server could not be started at {self.base_url}. "
+            f"Check that mlx-lm is installed (`pip install mlx-lm`) "
+            f"and that the model '{self.model}' has been downloaded.",
+        )
 
     def _chat(self, prompt: str, temperature: float = 0.1) -> str:
         # Append /no_think to disable Qwen3's chain-of-thought reasoning mode.
         # Without this, the model outputs a long <think>...</think> block before
         # the actual answer, which breaks SQL extraction and wastes time.
         no_think_prompt = prompt + " /no_think"
-        try:
+
+        def _do_request() -> str:
             resp = self._client.post(
                 f"{self.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}"},
@@ -511,10 +575,20 @@ class MLXBackend(OpenAICompatibleBackend):
                 or msg.get("reasoning")
                 or ""
             )
+
+        try:
+            return _do_request()
         except httpx.ConnectError:
+            # Server not reachable — attempt automatic start, then retry once.
+            logger.info("MLX server unreachable — attempting auto-start…")
+            started = self._start_and_wait()
+            if started:
+                try:
+                    return _do_request()
+                except httpx.ConnectError:
+                    pass
             raise ConnectionError(
-                f"MLX server not reachable at {self.base_url}.\n"
-                f"Open a terminal and run:\n"
-                f"  python3 -m mlx_lm server --model {self.model} --port 8080\n"
-                f"Then try again."
+                f"MLX server at {self.base_url} is not running and could not be "
+                f"started automatically. Check that mlx-lm is installed "
+                f"(`pip install mlx-lm`) and that model '{self.model}' is cached."
             )
