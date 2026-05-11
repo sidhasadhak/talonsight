@@ -1,4 +1,4 @@
-# ⚡ exachat
+# ⚡ TalonSight
 
 **Ask your database anything — in plain English. Get SQL, data, and interactive charts.**
 
@@ -18,7 +18,7 @@ Local LLMs only. No data leaves your machine. Works with DuckDB, Exasol, Postgre
 - **Metrics Catalog** — define, save, and reuse KPI queries with one click
 - **Auto-correct retry loop** — failed queries are automatically diagnosed and fixed by the LLM, up to 3 attempts; the UI shows live attempt progress and a summary of what was corrected
 - **Enriched Knowledge Base** — 203 domain SQL patterns across eCommerce, Finance, Marketing, Product, and BI; each pattern includes inflation/deflation causes, causal relationships, graduated SQL assets, and anti-patterns
-- **Semantic embeddings** — optional in-process embeddings (`pip install exachat[embeddings]`) improve SQL pattern retrieval and schema table matching; understands business vocabulary ("burn rate" → expense tables, "churn" → cancellation tables)
+- **Semantic embeddings** — optional in-process embeddings (`pip install talonsight[embeddings]`) improve SQL pattern retrieval and schema table matching; understands business vocabulary ("burn rate" → expense tables, "churn" → cancellation tables)
 - **Smart schema retrieval** — for databases with 15+ tables, only the relevant subset is sent to the LLM instead of the full schema; join-connected tables are always included
 - **Knowledge Base** — ChromaDB-backed store for SQL patterns; injects similar patterns as few-shot examples into the prompt
 - **Join inference** — detects join paths by exact and fuzzy column-name matching; explicitly warns the LLM about table pairs that cannot be joined
@@ -32,11 +32,11 @@ Local LLMs only. No data leaves your machine. Works with DuckDB, Exasol, Postgre
 ## Install
 
 ```bash
-pip install exachat                  # core — DuckDB, PostgreSQL, SQLite, MySQL
-pip install exachat[embeddings]      # + semantic embeddings (recommended)
-pip install exachat[exasol]          # + Exasol support
-pip install exachat[mlx]             # + Apple Silicon MLX LLM backend
-pip install exachat[all]             # everything
+pip install talonsight                  # core — DuckDB, PostgreSQL, SQLite, MySQL
+pip install talonsight[embeddings]      # + semantic embeddings (recommended)
+pip install talonsight[exasol]          # + Exasol support
+pip install talonsight[mlx]             # + Apple Silicon MLX LLM backend
+pip install talonsight[all]             # everything
 ```
 
 **Requirements:** Python ≥ 3.9, and a local LLM server (see [LLM Setup](#llm-setup) below).
@@ -74,7 +74,7 @@ Using **LM Studio** or **vLLM**? Choose **"OpenAI-compatible API"** in the sideb
 ### 2. (Optional but recommended) Enable semantic embeddings
 
 ```bash
-pip install exachat[embeddings]
+pip install talonsight[embeddings]
 ```
 
 The `nomic-ai/nomic-embed-text-v1.5` model (~130 MB) is downloaded automatically on first connect. After installing, select **FastEmbed (in-process)** in the sidebar's Embeddings expander before connecting.
@@ -82,7 +82,7 @@ The `nomic-ai/nomic-embed-text-v1.5` model (~130 MB) is downloaded automatically
 ### 3. Launch the UI
 
 ```bash
-exachat
+talonsight
 ```
 
 Opens at `http://localhost:8501`.
@@ -100,13 +100,13 @@ Advanced settings — LLM backend, Embeddings, Knowledge Base, Metrics directory
 
 ![Compact sidebar and auto-generated starter questions](docs/images/screenshot-connected.png)
 
-After connecting, exachat generates 5 starter questions based on your actual schema and data profile.
+After connecting, talonsight generates 5 starter questions based on your actual schema and data profile.
 
 ### 5. Ask questions
 
-Type in plain English — exachat generates SQL, runs it read-only, and shows a plain-English summary, an interactive chart, and the raw data table.
+Type in plain English — talonsight generates SQL, runs it read-only, and shows a plain-English summary, an interactive chart, and the raw data table.
 
-If the generated SQL fails, exachat automatically retries up to 3 times: the LLM diagnoses the error, rewrites the SQL, re-validates safety, and re-executes — all without any action from you. The UI shows live attempt progress ("⚠️ Attempt 2/3 — refining query…") and a collapsed summary of what was corrected on success.
+If the generated SQL fails, talonsight automatically retries up to 3 times: the LLM diagnoses the error, rewrites the SQL, re-validates safety, and re-executes — all without any action from you. The UI shows live attempt progress ("⚠️ Attempt 2/3 — refining query…") and a collapsed summary of what was corrected on success.
 
 Use the **chart controls** row below each answer to switch chart type, change the x-axis, or select which measures to plot — without re-running the query.
 
@@ -157,21 +157,21 @@ Auto-generated entity-relationship diagram using Mermaid.js. Tables show all col
 ## Python API
 
 ```python
-from exachat import ExasolChat
+from talonsight import TalonSight
 
 # DuckDB (local file)
-chat = ExasolChat("duckdb:///path/to/analytics.duckdb")
-chat = ExasolChat("./my_data.duckdb")  # bare path works too
+chat = TalonSight("duckdb:///path/to/analytics.duckdb")
+chat = TalonSight("./my_data.duckdb")  # bare path works too
 
 # Exasol
-chat = ExasolChat("exa+pyexasol://user:pass@host:8563/MY_SCHEMA")
+chat = TalonSight("exa+pyexasol://user:pass@host:8563/MY_SCHEMA")
 
 # PostgreSQL
-chat = ExasolChat("postgresql://user:pass@localhost:5432/mydb")
+chat = TalonSight("postgresql://user:pass@localhost:5432/mydb")
 
 # SQLite / MySQL / anything SQLAlchemy supports
-chat = ExasolChat("sqlite:///local.db")
-chat = ExasolChat("mysql+pymysql://user:pass@host:3306/db")
+chat = TalonSight("sqlite:///local.db")
+chat = TalonSight("mysql+pymysql://user:pass@host:3306/db")
 ```
 
 ```python
@@ -192,7 +192,7 @@ print(result.correction_explanation)  # what the LLM says it fixed
 ### Using a different LLM backend
 
 ```python
-from exachat.llm import OllamaBackend, OpenAICompatibleBackend, MLXBackend
+from talonsight.llm import OllamaBackend, OpenAICompatibleBackend, MLXBackend
 
 # Ollama
 llm = OllamaBackend(model="qwen3:8b")
@@ -203,24 +203,24 @@ llm = OpenAICompatibleBackend(base_url="http://localhost:1234/v1", model="qwen2.
 # Apple Silicon MLX — server starts automatically on first query
 llm = MLXBackend(base_url="http://localhost:8080/v1", model="mlx-community/Qwen3-8B-4bit")
 
-chat = ExasolChat("./data.duckdb", llm=llm)
+chat = TalonSight("./data.duckdb", llm=llm)
 ```
 
 ### Enabling semantic embeddings
 
 ```python
-# In-process via fastembed (recommended — pip install exachat[embeddings])
-chat = ExasolChat("./data.duckdb", embedding_backend="fastembed")
+# In-process via fastembed (recommended — pip install talonsight[embeddings])
+chat = TalonSight("./data.duckdb", embedding_backend="fastembed")
 
 # Via Ollama embedding server (ollama pull nomic-embed-text)
-chat = ExasolChat("./data.duckdb",
+chat = TalonSight("./data.duckdb",
     embedding_backend="ollama",
     embedding_url="http://localhost:11434",
     embedding_model="nomic-embed-text",
 )
 
 # Via any OpenAI-compatible embedding API
-chat = ExasolChat("./data.duckdb",
+chat = TalonSight("./data.duckdb",
     embedding_backend="openai",
     embedding_url="http://localhost:1234/v1",
     embedding_model="nomic-embed-text",
@@ -230,7 +230,7 @@ chat = ExasolChat("./data.duckdb",
 ### Access control
 
 ```python
-chat = ExasolChat(
+chat = TalonSight(
     "exa+pyexasol://readonly_user:pass@host:8563/PROD",
     allowed_schemas=["SALES", "ANALYTICS"],
     allowed_tables=["CUSTOMERS", "ORDERS", "PRODUCTS"],
@@ -245,9 +245,9 @@ chat = ExasolChat(
 ### Scripting / batch reports
 
 ```python
-from exachat import ExasolChat
+from talonsight import TalonSight
 
-with ExasolChat("duckdb:///sales.duckdb") as chat:
+with TalonSight("duckdb:///sales.duckdb") as chat:
     monthly = chat.ask("Monthly revenue for the last 12 months")
     top_products = chat.ask("Top 5 products by units sold this quarter")
 
@@ -273,12 +273,12 @@ with ExasolChat("duckdb:///sales.duckdb") as chat:
 MLX runs models natively on Apple M-series chips via Metal — typically 20–30% faster than Ollama on the same hardware.
 
 ```bash
-pip install exachat[mlx]
+pip install talonsight[mlx]
 ```
 
 In the sidebar: **LLM Backend → MLX (Apple Silicon)**.
 
-**The server starts automatically.** On first query, exachat spawns the MLX server in the background, waits for the model to load into memory (~30 s the first time), and then runs your query. If the model isn't cached locally, it is downloaded automatically before the server starts. No terminal command needed at any point.
+**The server starts automatically.** On first query, talonsight spawns the MLX server in the background, waits for the model to load into memory (~30 s the first time), and then runs your query. If the model isn't cached locally, it is downloaded automatically before the server starts. No terminal command needed at any point.
 
 Default server URL: `http://localhost:8080/v1`, model: `mlx-community/Qwen3-8B-4bit`.
 
@@ -296,7 +296,7 @@ Any server implementing `/v1/chat/completions` works — LM Studio, vLLM, text-g
 
 ## Auto-Correct Query Retry
 
-When a generated SQL query fails at execution, exachat does not surface the raw database error immediately. Instead, it automatically retries up to **3 attempts**:
+When a generated SQL query fails at execution, talonsight does not surface the raw database error immediately. Instead, it automatically retries up to **3 attempts**:
 
 1. The DB error is passed back to the LLM along with the original question and failed SQL
 2. The LLM diagnoses the error and returns a corrected query
@@ -327,7 +327,7 @@ if result.auto_corrected:
 
 ## Embeddings
 
-Embeddings power two things in exachat:
+Embeddings power two things in talonsight:
 
 1. **SQL pattern retrieval** — finds relevant SQL technique patterns (window functions, YoY comparisons, etc.) to inject as examples into the prompt
 2. **Schema table retrieval** — for databases with 15+ tables, retrieves only the relevant tables per query instead of dumping the full schema into the prompt
@@ -337,14 +337,14 @@ Embeddings power two things in exachat:
 | Backend | Setup | Quality | Notes |
 |---------|-------|---------|-------|
 | Bag of words (default) | None — works offline | Keyword matching only | Good for small schemas and standard SQL vocabulary |
-| **FastEmbed** *(recommended)* | `pip install exachat[embeddings]` | Semantic | In-process ONNX, no server. Model auto-downloaded (~130 MB). |
+| **FastEmbed** *(recommended)* | `pip install talonsight[embeddings]` | Semantic | In-process ONNX, no server. Model auto-downloaded (~130 MB). |
 | Ollama | `ollama pull nomic-embed-text` | Semantic | Requires Ollama running separately |
 | OpenAI-compatible | Any `/v1/embeddings` server | Semantic | LM Studio, etc. |
 
 ### FastEmbed setup
 
 ```bash
-pip install exachat[embeddings]
+pip install talonsight[embeddings]
 ```
 
 That's it. On first connect, the `nomic-ai/nomic-embed-text-v1.5` model is downloaded (~130 MB) and cached at `~/.cache/fastembed/`. All subsequent connects are instant.
@@ -371,7 +371,7 @@ With bag-of-words, retrieval is purely keyword-based. With semantic embeddings:
 
 ## Knowledge Base
 
-exachat ships with **203 enriched SQL patterns** across five business domains. Each pattern includes:
+talonsight ships with **203 enriched SQL patterns** across five business domains. Each pattern includes:
 
 - **Metric nature** — what the metric measures, what it does not, and common misconceptions
 - **Graduated SQL assets** — basic, intermediate, and advanced SQL templates
@@ -398,7 +398,7 @@ Patterns are embedded using the same embedding backend as schema retrieval, so b
 You can also load your own patterns:
 
 ```python
-chat = ExasolChat("./data.duckdb", kb_path="/path/to/your/patterns/")
+chat = TalonSight("./data.duckdb", kb_path="/path/to/your/patterns/")
 ```
 
 Or seed the KB with a question→SQL pair:
@@ -407,7 +407,7 @@ Or seed the KB with a question→SQL pair:
 chat.kb.load_file("/path/to/pattern.json")
 ```
 
-Patterns persist at `~/.exachat/kb/` by default. Point the UI to a custom directory via the **📖 Knowledge Base** expander or `EXACHAT_KB_PATH` in `.env`.
+Patterns persist at `~/.talonsight/kb/` by default. Point the UI to a custom directory via the **📖 Knowledge Base** expander or `TALONSIGHT_KB_PATH` in `.env`.
 
 ---
 
@@ -426,7 +426,7 @@ Patterns persist at `~/.exachat/kb/` by default. Point the UI to a custom direct
 
 ## Architecture
 
-![exachat architecture — SQL generation pipeline](docs/images/architecture.png)
+![talonsight architecture — SQL generation pipeline](docs/images/architecture.png)
 
 The diagram shows the full SQL generation pipeline: from a natural language question through KB retrieval, schema narrowing, LLM generation, safety validation, auto-correct retry loop, and result enrichment.
 
@@ -437,10 +437,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component breakdown and a Me
 ## Configuration Reference
 
 ```python
-from exachat import ExasolChat
-from exachat.llm import OllamaBackend
+from talonsight import TalonSight
+from talonsight.llm import OllamaBackend
 
-chat = ExasolChat(
+chat = TalonSight(
     connection="duckdb:///sales.duckdb",
     llm=OllamaBackend(model="qwen3:8b"),
 
@@ -470,7 +470,7 @@ chat = ExasolChat(
     chart_library="auto",  # "plotly", "altair", or "auto"
 
     # Metrics
-    metrics_path=None,     # path to metrics JSON directory (~/.exachat/metrics/ by default)
+    metrics_path=None,     # path to metrics JSON directory (~/.talonsight/metrics/ by default)
 )
 ```
 
