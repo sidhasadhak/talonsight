@@ -113,7 +113,8 @@ def main() -> None:
         if importlib.util.find_spec("mlx_lm") is None:
             print(f"\n  {_YELL}!{_RST}  mlx_lm not found — installing {_CYAN}mlx-lm{_RST} now…\n")
             result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "mlx-lm", "transformers>=4.47"],
+                [sys.executable, "-m", "pip", "install",
+                 "mlx-lm", "transformers>=4.47", "tokenizers>=0.22.0,<=0.23.0"],
                 check=False,
             )
             importlib.invalidate_caches()
