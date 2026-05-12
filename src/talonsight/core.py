@@ -527,9 +527,15 @@ def _pg_fix_timestamp_casts(sql: str) -> str:
     empty strings.  Wrapping the expression in NULLIF(expr, '') makes the cast
     return NULL instead of erroring.
 
-    Handles both forms the LLM commonly emits:
-        CAST(col AS TIMESTAMP)  →  NULLIF(col, '')::TIMESTAMP
-        col::TIMESTAMP          →  NULLIF(col, '')::TIMESTAMP
+    Handles the three forms the LLM commonly emits:
+        CAST(col AS TIMESTAMP)        →  NULLIF(col, '')::TIMESTAMP
+        col::TIMESTAMP                →  NULLIF(col, '')::TIMESTAMP
+        alias.col::TIMESTAMP          →  NULLIF(alias.col, '')::TIMESTAMP
+
+    The third form is the critical fix: the previous regex ``(\w+)::TYPE`` only
+    captured the bare column name and left the ``alias.`` prefix outside the
+    match, producing ``alias.NULLIF(col, '')::TYPE`` — which PostgreSQL reads as
+    a schema-qualified function call and raises InvalidSchemaName.
     """
     _TS = r'(TIMESTAMP(?:TZ|(?:\s+WITH(?:OUT)?\s+TIME\s+ZONE))?|DATE)'
     # Already-wrapped expressions — don't touch
@@ -541,24 +547,36 @@ def _pg_fix_timestamp_casts(sql: str) -> str:
             return f"{expr}::{typ}"
         return f"NULLIF({expr}, '')::{typ.strip()}"
 
-    # 1. CAST(expr AS TIMESTAMP/DATE)
+    # 1. CAST(expr AS TIMESTAMP/DATE) — bare column or alias.col
     sql = re.sub(
-        rf'CAST\(\s*(\w+)\s+AS\s+{_TS}\s*\)',
+        rf'CAST\(\s*(\w+(?:\.\w+)?)\s+AS\s+{_TS}\s*\)',
         lambda m: _wrap(m.group(1), m.group(2)),
         sql, flags=re.IGNORECASE,
     )
 
-    # 2. plain_identifier::TIMESTAMP/DATE  (skip function names / keywords)
+    # 2. [alias.]col::TIMESTAMP/DATE
+    #
+    # Pattern: optional `alias.` prefix + column name + ::TYPE
+    # The alias. group is captured so the full `alias.col` expression
+    # is passed into NULLIF — preventing the orphaned-prefix bug where
+    # `oi.col::timestamp` became `oi.NULLIF(col,'')::timestamp`.
+    #
+    # Negative lookbehind (?<!\w) anchors the match without consuming
+    # a preceding word character (replaces \b which fired at the dot).
     _SKIP = {"NOW", "CURRENT_TIMESTAMP", "CURRENT_DATE", "INTERVAL",
              "NULLIF", "COALESCE", "CAST", "TRUE", "FALSE"}
+
     def _replace_bare(m: re.Match) -> str:
-        ident = m.group(1)
-        if ident.upper() in _SKIP:
+        alias   = m.group(1)  # e.g. "oi" — may be None
+        col     = m.group(2)  # e.g. "shipping_limit_date"
+        typ     = m.group(3)  # e.g. "TIMESTAMP"
+        if col.upper() in _SKIP:
             return m.group(0)
-        return _wrap(ident, m.group(2))
+        full_expr = f"{alias}.{col}" if alias else col
+        return _wrap(full_expr, typ)
 
     sql = re.sub(
-        rf'\b(\w+)::{_TS}\b',
+        rf'(?<!\w)(?:(\w+)\.)?(\w+)::{_TS}',
         _replace_bare,
         sql, flags=re.IGNORECASE,
     )
