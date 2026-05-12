@@ -82,9 +82,9 @@ class TalonSight:
         kb_path: Optional[str] = None,
         chart_library: str = "auto",
         metrics_path: Optional[str] = None,
-        embedding_backend: str = "fastembed",
+        embedding_backend: str = "auto",
         embedding_url: str = "",
-        embedding_model: str = "nomic-ai/nomic-embed-text-v1.5",
+        embedding_model: str = "nomic-embed-text",
     ):
         # Connection
         if isinstance(connection, str):

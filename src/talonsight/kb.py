@@ -213,8 +213,34 @@ class _FastEmbedEF:
         return self._model
 
 
+def _detect_best_ef(
+    url: str = "http://localhost:11434",
+    model: str = "nomic-embed-text",
+) -> "_BagOfWordsEF | _SemanticEF":
+    """Probe Ollama; return a SemanticEF if ``model`` is pulled, else BagOfWordsEF.
+
+    The probe is a single GET to ``/api/tags`` with a 2-second timeout, so it
+    never blocks the connect flow for more than 2 s.  On any failure (Ollama
+    not running, model not pulled, network error) it silently returns BOW.
+    """
+    try:
+        import httpx
+        resp = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=2.0)
+        resp.raise_for_status()
+        pulled = [m["name"].split(":")[0] for m in resp.json().get("models", [])]
+        if model in pulled:
+            ef = _SemanticEF(base_url=url, model=model, api_type="ollama")
+            if ef.available:
+                logger.info("Auto-detect: Ollama %s available — using semantic embeddings.", model)
+                return ef
+    except Exception:
+        pass
+    logger.info("Auto-detect: Ollama not available — using bag-of-words embeddings.")
+    return _BagOfWordsEF()
+
+
 def build_embedding_fn(
-    backend: str = "bow",
+    backend: str = "auto",
     url: str = "",
     model: str = "",
 ) -> "_BagOfWordsEF | _FastEmbedEF | _SemanticEF":
@@ -223,7 +249,8 @@ def build_embedding_fn(
     Parameters
     ----------
     backend:
-        ``"bow"``       — offline bag-of-words (default, no setup needed)
+        ``"auto"``      — probe Ollama for ``nomic-embed-text``; fall back to BOW
+        ``"bow"``       — offline bag-of-words (no setup needed)
         ``"fastembed"`` — in-process via fastembed (``pip install talonsight[embeddings]``)
         ``"ollama"``    — Ollama embedding API (``ollama pull nomic-embed-text``)
         ``"openai"``    — OpenAI-compatible embedding API (LM Studio, etc.)
@@ -233,11 +260,16 @@ def build_embedding_fn(
         OpenAI default : ``http://localhost:1234/v1``
     model:
         Embedding model name.
-        fastembed default : ``nomic-ai/nomic-embed-text-v1.5``
-        Ollama / OpenAI  : ``nomic-embed-text``
+        auto / Ollama   : ``nomic-embed-text``
+        fastembed       : ``nomic-ai/nomic-embed-text-v1.5``
     """
     if not backend or backend == "bow":
         return _BagOfWordsEF()
+
+    if backend == "auto":
+        resolved_url   = url.strip()   or "http://localhost:11434"
+        resolved_model = model.strip() or "nomic-embed-text"
+        return _detect_best_ef(url=resolved_url, model=resolved_model)
 
     if backend == "fastembed":
         fe_model = model.strip() or _FastEmbedEF.DEFAULT_MODEL
@@ -348,7 +380,8 @@ def _embed_text(chunk: dict) -> str:
 class KnowledgeBase:
     """ChromaDB-backed SQL pattern knowledge base."""
 
-    _BUILTIN_DIR = Path(__file__).parent / "knowledge_base"
+    _BUILTIN_DIR  = Path(__file__).parent / "knowledge_base"
+    _FP_FILE_NAME = ".builtin_fingerprint"   # stored inside persist_dir
 
     def __init__(
         self,
@@ -386,6 +419,32 @@ class KnowledgeBase:
                 )
             raise
 
+    # ── Fingerprint helpers ───────────────────────────────────────────
+
+    def _compute_builtin_fingerprint(self) -> str:
+        """MD5 over (filename, size, mtime_ns) of every built-in JSON file."""
+        h = hashlib.md5()
+        for f in sorted(self._BUILTIN_DIR.glob("*.json")):
+            stat = f.stat()
+            h.update(f"{f.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+        return h.hexdigest()
+
+    def _load_builtin_fingerprint(self) -> str:
+        fp_file = Path(self._persist_dir) / self._FP_FILE_NAME
+        try:
+            return fp_file.read_text().strip()
+        except Exception:
+            return ""
+
+    def _save_builtin_fingerprint(self, fp: str) -> None:
+        fp_file = Path(self._persist_dir) / self._FP_FILE_NAME
+        try:
+            fp_file.write_text(fp)
+        except Exception:
+            pass
+
+    # ── Built-in loader ───────────────────────────────────────────────
+
     def _load_builtin(self) -> None:
         if not self._BUILTIN_DIR.exists():
             return
@@ -399,8 +458,18 @@ class KnowledgeBase:
                     chunks.append(data)
             except Exception:
                 pass
-        if chunks:
-            self._upsert(chunks)
+        if not chunks:
+            return
+
+        # Skip upsert when the built-in files are unchanged AND the collection
+        # already contains data (i.e. a previous run already embedded them).
+        current_fp = self._compute_builtin_fingerprint()
+        if current_fp == self._load_builtin_fingerprint() and self._collection.count() > 0:
+            logger.debug("Built-in KB unchanged (fingerprint match) — skipping upsert.")
+            return
+
+        self._upsert(chunks)
+        self._save_builtin_fingerprint(current_fp)
 
     def load_dir(self, path: str) -> int:
         """Load additional JSON chunks from a directory. Returns count ingested."""
