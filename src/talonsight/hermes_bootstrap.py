@@ -485,38 +485,65 @@ def stop_gateway() -> None:
 def _extract_sql(text: str) -> Optional[str]:
     """Pull a SQL SELECT statement out of a Hermes response.
 
-    hermes3 (and similar small models) often emit tool calls as scratchpad
-    JSON rather than invoking the MCP protocol.  We intercept here.
+    Models often emit MCP tool calls as scratchpad JSON rather than invoking
+    the protocol.  We intercept here and convert to executable SQL.
 
     Patterns handled (in priority order):
       1. {"arguments": {"sql": "SELECT ..."}, "name": "run_sql"}
-      2. {"sql": "SELECT ..."}
-      3. ```sql SELECT ... ```
-      4. Bare SELECT ... statement
+      2. {"arguments": {"table": "...", "n": N}, "name": "get_sample_data"}
+         → converted to SELECT * FROM {table} LIMIT {n}
+      3. {"sql": "SELECT ..."}
+      4. ```sql SELECT ... ```
+      5. Bare SELECT ... statement
     """
-    import json, re
+    import json as _json
 
     cleaned = re.sub(r'<SCRATCHPAD>|</SCRATCHPAD>', '', text, flags=re.IGNORECASE).strip()
 
-    # Pattern 1 & 2: any JSON with a "sql" key anywhere
-    for chunk in re.findall(r'\{[^{}]*"sql"[^{}]*\}', cleaned, re.DOTALL):
-        try:
-            obj = json.loads(chunk)
-            if "arguments" in obj and isinstance(obj["arguments"], dict):
-                sql = obj["arguments"].get("sql", "")
-            else:
-                sql = obj.get("sql", "")
-            if sql and re.search(r'\bSELECT\b', sql, re.IGNORECASE):
-                return _clean_sql(sql)
-        except (json.JSONDecodeError, ValueError):
-            pass
+    # Patterns 1–3: find all JSON objects in the text, including nested ones.
+    # We use a simple brace-depth scanner to extract complete JSON blobs.
+    def _iter_json_blobs(s: str):
+        depth = 0
+        start = -1
+        for i, ch in enumerate(s):
+            if ch == '{':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0 and start != -1:
+                    yield s[start:i+1]
+                    start = -1
 
-    # Pattern 3: fenced code block — extract content, then strip any trailing prose
+    for chunk in _iter_json_blobs(cleaned):
+        try:
+            obj = _json.loads(chunk)
+        except (ValueError, _json.JSONDecodeError):
+            continue
+
+        name = (obj.get("name") or "").lower().replace("_", "").replace("mcp", "").replace("talonsight", "")
+        args = obj.get("arguments") if isinstance(obj.get("arguments"), dict) else {}
+
+        # get_sample_data / getsampledata tool call → simple SELECT
+        if "getsampledata" in name or "sampledata" in name:
+            tbl = args.get("table") or args.get("table_name") or ""
+            n   = int(args.get("n") or 10)
+            if tbl:
+                return f"SELECT * FROM {tbl} LIMIT {n}"
+            # table arg missing — fall through to let the model retry
+
+        # run_sql / runsql: extract sql argument
+        sql = args.get("sql", "") or obj.get("sql", "")
+        if sql and re.search(r'\bSELECT\b', sql, re.IGNORECASE):
+            return _clean_sql(sql)
+
+    # Pattern 4: fenced code block
     m = re.search(r'```(?:sql)?\s*(SELECT.+?)(?:```|$)', cleaned, re.DOTALL | re.IGNORECASE)
     if m:
         return _clean_sql(m.group(1))
 
-    # Pattern 4: bare SELECT statement
+    # Pattern 5: bare SELECT statement
     m = re.search(r'(SELECT\s+.+)', cleaned, re.DOTALL | re.IGNORECASE)
     if m:
         return _clean_sql(m.group(1))
@@ -525,8 +552,22 @@ def _extract_sql(text: str) -> Optional[str]:
 
 
 def _clean_sql(sql: str) -> Optional[str]:
-    """Strip trailing non-SQL prose and normalise a SQL string."""
-    import re
+    """Strip trailing non-SQL prose and normalise a SQL string.
+
+    Handles the common model failure of appending prose after a semicolon
+    on the same line, e.g.:
+        SELECT * FROM t LIMIT 10;` query without any filters?
+    """
+    # First, truncate at the first semicolon that's followed by non-SQL text.
+    # We keep the SQL up to (but not including) the semicolon.
+    # A semicolon followed only by whitespace/EOL is fine (stripped later).
+    semi_m = re.search(r';(.+)', sql)
+    if semi_m:
+        trailing = semi_m.group(1).strip().lstrip('`').strip()
+        # If anything remains after the semicolon it's prose — cut there
+        if trailing:
+            sql = sql[:semi_m.start()]
+
     lines = sql.strip().splitlines()
     sql_lines: list[str] = []
     for line in lines:
@@ -540,17 +581,66 @@ def _clean_sql(sql: str) -> Optional[str]:
     return None
 
 
+def _auto_qualify_tables(sql: str) -> str:
+    """Replace unqualified table references with schema-qualified ones.
+
+    e.g.  FROM customer  →  FROM ecommerce.customer
+          JOIN orders     →  JOIN ecommerce.orders
+
+    Only substitutes bare names that exist in a non-main schema; tables
+    already qualified (schema.table) or in the main schema are left alone.
+    """
+    try:
+        from talonsight.mcp_server import _get_core
+        ts = _get_core()
+        df = ts._db.execute_query(
+            "SELECT table_schema, table_name FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('information_schema','pg_catalog','main') "
+            "AND table_type = 'BASE TABLE'"
+        )
+        if df is None or df.empty:
+            return sql
+        # Build map: table_name (lower) → schema
+        tbl_map: dict[str, str] = {}
+        for _, row in df.iterrows():
+            tbl_map[str(row["table_name"]).lower()] = str(row["table_schema"])
+
+        def _qualify(m: re.Match) -> str:
+            kw   = m.group(1)   # FROM or JOIN
+            name = m.group(2)   # table name (may be quoted)
+            bare = name.strip('"').lower()
+            if bare in tbl_map:
+                schema = tbl_map[bare]
+                return f"{kw} {schema}.{name}"
+            return m.group(0)
+
+        # Match FROM/JOIN followed by an unqualified identifier (no dot before it)
+        qualified = re.sub(
+            r'\b(FROM|JOIN)\s+("?[A-Za-z_]\w*"?)(?!\s*\.)',
+            _qualify,
+            sql,
+            flags=re.IGNORECASE,
+        )
+        return qualified
+    except Exception:
+        return sql
+
+
 def _execute_sql_safe(sql: str) -> tuple[str, str, Optional[pd.DataFrame]]:
     """Run sql via the MCP server; return (markdown_table, error_or_empty, df_or_None).
 
-    Schema + table restrictions are enforced via the same allowlist that the
-    MCP server builds from information_schema — the agent cannot query tables
+    Auto-qualifies bare table names (customer → ecommerce.customer) and
+    enforces the schema/table allowlist so the agent cannot query objects
     outside the connected database.
     """
     try:
         from talonsight.mcp_server import _get_core, _get_allowlists
         from talonsight.safety import validate_sql, RiskLevel
         ts = _get_core()
+
+        # Qualify unqualified table references before safety check
+        sql = _auto_qualify_tables(sql)
+
         _schemas, _tables = _get_allowlists()
         verdict = validate_sql(
             sql,
