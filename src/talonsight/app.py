@@ -949,11 +949,15 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
             show_chart = False
         elif viz_choice == "auto":
             chart_type_override = None
-            show_chart = (
-                has_chart_data
-                and r.chart_obj is not None
-                and (r.chart_config or {}).get("chart_type") != "table_only"
-            )
+            # Hermes / agent results never populate chart_obj — default to bar
+            # when there is chartable data (≥1 numeric + ≥1 dimension column).
+            _has_chart_obj = r.chart_obj is not None
+            _is_agent_result = r.agent_steps is not None
+            show_chart = has_chart_data and (
+                _has_chart_obj or _is_agent_result
+            ) and (r.chart_config or {}).get("chart_type") != "table_only"
+            if _is_agent_result and not _has_chart_obj:
+                chart_type_override = "bar"  # sensible default for agent results
         else:
             chart_type_override = viz_choice
             show_chart = has_chart_data

@@ -992,7 +992,66 @@ def ask_hermes(
             narration = _narrate_result(question, sql, table)
             return HermesResult(answer=narration, sql=sql, data=_df)
 
+    # ── Rescue ASCII / text-chart responses ──────────────────────────────────
+    # Some models (especially smaller ones) output "I cannot render graphics…
+    # here is a text-based bar chart" instead of returning raw data.
+    # We parse that ASCII output back into a real DataFrame so the Streamlit
+    # chart renderer can produce an actual Plotly bar chart.
+    if answer and _df_from_ascii_chart(answer) is not None:
+        _rescued_df = _df_from_ascii_chart(answer)
+        # Strip the "I cannot render…" preamble so only the key insight stays
+        _clean_answer = re.sub(
+            r"I cannot render[^\n]*\n?", "", answer, flags=re.IGNORECASE
+        ).strip()
+        return HermesResult(answer=_clean_answer, sql="", data=_rescued_df)
+
     return HermesResult(answer=answer) if answer else HermesResult(answer="No answer was returned.")
+
+
+def _df_from_ascii_chart(text: str) -> "Optional[pd.DataFrame]":
+    """Parse a text-based bar chart into a two-column DataFrame.
+
+    Handles two common model output formats:
+
+      1.  STATE | ############ 718,723
+      2.  STATE         718723    (whitespace-separated, numeric in last column)
+
+    Returns a DataFrame with columns [label_col, value_col] or None if not
+    enough rows are found.
+    """
+    rows: list[tuple[str, float]] = []
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("-") or line.startswith("="):
+            continue
+
+        # Format 1 — "LABEL | ####...#### 123,456"
+        m = re.match(r'^([^|]+)\|\s*[#\-=*]+\s*([\d,\.]+)\s*$', line)
+        if m:
+            label = m.group(1).strip()
+            val_str = m.group(2).replace(",", "")
+            try:
+                rows.append((label, float(val_str)))
+                continue
+            except ValueError:
+                pass
+
+        # Format 2 — "LABEL   123456" or "LABEL   1,234,567"
+        m2 = re.match(r'^([A-Za-z][A-Za-z\s_\-]+?)\s+([\d,\.]+)\s*$', line)
+        if m2:
+            label = m2.group(1).strip()
+            val_str = m2.group(2).replace(",", "")
+            try:
+                rows.append((label, float(val_str)))
+            except ValueError:
+                pass
+
+    if len(rows) < 2:
+        return None
+
+    labels, values = zip(*rows)
+    return pd.DataFrame({"category": list(labels), "value": list(values)})
 
 
 def _narrate_result(question: str, sql: str, table: str) -> str:
