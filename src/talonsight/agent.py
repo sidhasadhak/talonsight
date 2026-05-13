@@ -493,7 +493,7 @@ class AgentLoop:
             for tbl in tables:
                 try:
                     count_sql = f'SELECT COUNT(*) AS n FROM "{tbl.name}"'
-                    df = self._connector.run_query(count_sql)
+                    df = self._connector.execute_query(count_sql)
                     n = int(df.iloc[0, 0]) if df is not None and len(df) > 0 else "?"
                 except Exception:
                     n = "?"
@@ -515,8 +515,9 @@ class AgentLoop:
             for tbl in all_tables:
                 lines.append(f"\nTable: {tbl.name}")
                 for col in tbl.columns:
-                    nullable = "nullable" if col.get("nullable", True) else "not null"
-                    lines.append(f"  {col['name']}  {col['type']}  ({nullable})")
+                    # ColumnInfo is a dataclass — use attribute access, not dict
+                    nullable = "nullable" if col.nullable else "not null"
+                    lines.append(f"  {col.name}  {col.type}  ({nullable})")
             return "\n".join(lines)
         except Exception as exc:
             return f"Could not get schema: {exc}"
@@ -538,12 +539,12 @@ class AgentLoop:
                 )
                 if tbl_info:
                     cols_sql = ", ".join(
-                        f'"{c["name"]}"' for c in tbl_info.columns[:6]
+                        f'"{c.name}"' for c in tbl_info.columns[:6]
                     )
                 else:
                     cols_sql = "*"
             sql = f'SELECT {cols_sql} FROM "{table}" LIMIT {n}'
-            df = self._connector.run_query(sql)
+            df = self._connector.execute_query(sql)
             if df is None or df.empty:
                 return f"No rows returned from {table}."
             return df.to_markdown(index=False)
@@ -565,9 +566,9 @@ class AgentLoop:
             col_type = ""
             if tbl_info:
                 col_info = next(
-                    (c for c in tbl_info.columns if c["name"].lower() == column.lower()), None
+                    (c for c in tbl_info.columns if c.name.lower() == column.lower()), None
                 )
-                col_type = (col_info or {}).get("type", "").lower()
+                col_type = (col_info.type if col_info else "").lower()
 
             is_numeric = any(k in col_type for k in (
                 "int", "float", "double", "numeric", "decimal", "real", "number"
@@ -583,7 +584,7 @@ class AgentLoop:
                 f'COUNT(DISTINCT "{column}") AS distinct_count '
                 f'FROM "{table}"'
             )
-            df = self._connector.run_query(null_sql)
+            df = self._connector.execute_query(null_sql)
             if df is not None and len(df) > 0:
                 total = int(df.iloc[0]["total"])
                 nulls = int(df.iloc[0]["null_count"])
@@ -599,7 +600,7 @@ class AgentLoop:
                     f'SELECT MIN("{column}") AS min_val, MAX("{column}") AS max_val, '
                     f'AVG("{column}") AS avg_val FROM "{table}"'
                 )
-                df2 = self._connector.run_query(num_sql)
+                df2 = self._connector.execute_query(num_sql)
                 if df2 is not None and len(df2) > 0:
                     r = df2.iloc[0]
                     lines.append(
@@ -614,7 +615,7 @@ class AgentLoop:
                     f'FROM "{table}" WHERE "{column}" IS NOT NULL '
                     f'GROUP BY "{column}" ORDER BY freq DESC LIMIT 5'
                 )
-                df3 = self._connector.run_query(top_sql)
+                df3 = self._connector.execute_query(top_sql)
                 if df3 is not None and len(df3) > 0:
                     top = ", ".join(
                         f'"{row["value"]}" ({row["freq"]})' for _, row in df3.iterrows()
@@ -639,7 +640,7 @@ class AgentLoop:
             allowed_schemas=self._allowed_schemas,
             allowed_tables=self._allowed_tables,
         )
-        if verdict.risk == RiskLevel.BLOCKED:
+        if verdict.level == RiskLevel.BLOCKED:
             return f"BLOCKED: {verdict.reason}"
 
         # Apply PostgreSQL post-processing if needed
@@ -652,7 +653,7 @@ class AgentLoop:
             sql = sql.rstrip(";") + f"\nLIMIT {limit}"
 
         try:
-            df = self._connector.run_query(sql)
+            df = self._connector.execute_query(sql)
             if df is None or df.empty:
                 return "Query executed successfully but returned no rows."
 
