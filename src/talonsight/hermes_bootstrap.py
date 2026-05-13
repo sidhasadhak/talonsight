@@ -581,22 +581,36 @@ def _clean_sql(sql: str) -> Optional[str]:
     return None
 
 
+def _get_selected_schema() -> str:
+    """Return the schema the user selected at connect time, or empty string."""
+    try:
+        from talonsight.preferences import Preferences
+        return Preferences.load().selected_schema or ""
+    except Exception:
+        return ""
+
+
 def _auto_qualify_tables(sql: str) -> str:
     """Replace unqualified table references with schema-qualified ones.
 
     e.g.  FROM customer  →  FROM ecommerce.customer
           JOIN orders     →  JOIN ecommerce.orders
 
-    Only substitutes bare names that exist in a non-main schema; tables
-    already qualified (schema.table) or in the main schema are left alone.
+    Only substitutes bare names that exist in the user's selected schema;
+    tables already qualified (schema.table) or in the main schema are left alone.
     """
     try:
         from talonsight.mcp_server import _get_core
         ts = _get_core()
+        _sel_schema = _get_selected_schema()
+        _schema_filter = (
+            f"AND table_schema = '{_sel_schema}'"
+            if _sel_schema
+            else "AND table_schema NOT IN ('information_schema','pg_catalog','main')"
+        )
         df = ts._db.execute_query(
-            "SELECT table_schema, table_name FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('information_schema','pg_catalog','main') "
-            "AND table_type = 'BASE TABLE'"
+            f"SELECT table_schema, table_name FROM information_schema.tables "
+            f"WHERE table_type = 'BASE TABLE' {_schema_filter}"
         )
         if df is None or df.empty:
             return sql
@@ -655,9 +669,31 @@ def _execute_sql_safe(sql: str) -> tuple[str, str, Optional[pd.DataFrame]]:
         df = ts._db.execute_query(sql)
         if df is None or df.empty:
             return "Query returned no rows.", "", None
+        df = _normalise_dates(df)
         return df.to_markdown(index=False), "", df
     except Exception as exc:
         return "", str(exc), None
+
+
+def _normalise_dates(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert all date/datetime columns to YYYY-MM-DD strings.
+
+    Consistent ISO date strings make it far easier for LLMs to reason about
+    time-series data and write correct WHERE / GROUP BY date filters.
+    """
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].dt.strftime("%Y-%m-%d")
+        elif df[col].dtype == object:
+            # Detect object columns that contain Python date/datetime objects
+            sample = df[col].dropna().head(3)
+            if not sample.empty:
+                import datetime as _dt
+                if isinstance(sample.iloc[0], (_dt.date, _dt.datetime)):
+                    df[col] = df[col].apply(
+                        lambda v: v.strftime("%Y-%m-%d") if isinstance(v, (_dt.date, _dt.datetime)) else v
+                    )
+    return df
 
 
 def _ask_hermes_raw(prompt: str, timeout: int = 90) -> str:
@@ -730,13 +766,21 @@ def _build_enriched_prompt(
         q_tokens = set(re.split(r'\W+', search_text.lower()))
         q_tokens.discard('')
 
-        # Build full table list from information_schema (all schemas)
+        # Build full table list from information_schema — scoped to the schema
+        # the user selected at connect time so the agent cannot see or query
+        # tables from other schemas in the same database file.
+        _sel_schema = _get_selected_schema()
+        _schema_filter = (
+            f"AND table_schema = '{_sel_schema}'"
+            if _sel_schema
+            else "AND table_schema NOT IN ('information_schema','pg_catalog')"
+        )
         try:
             _df_all = ts._db.execute_query(
-                "SELECT table_schema, table_name, column_name "
-                "FROM information_schema.columns "
-                "WHERE table_schema NOT IN ('information_schema','pg_catalog') "
-                "ORDER BY table_name, ordinal_position"
+                f"SELECT table_schema, table_name, column_name "
+                f"FROM information_schema.columns "
+                f"WHERE 1=1 {_schema_filter} "
+                f"ORDER BY table_name, ordinal_position"
             )
             _all_cols: dict[str, list[str]] = {}
             _tbl_schema: dict[str, str] = {}
@@ -1075,12 +1119,15 @@ def _narrate_result(question: str, sql: str, table: str) -> str:
         )
         narration = result.stdout.strip()
         if narration and not _extract_sql(narration):
-            # Return narrative + collapsible data
-            return f"{narration}\n\n---\n**Data:**\n{table}"
+            # Return narrative only — the raw data is in HermesResult.data
+            # and will be rendered as a Plotly chart/table by the UI.
+            return narration
     except Exception:
         pass
-    # Fallback: return the raw table with the SQL
-    return f"**Results:**\n{table}\n\n```sql\n{sql}\n```"
+    # Fallback: no narration available — return a brief placeholder so the
+    # UI still has something to show in the Finding box.  The actual data
+    # table / chart is rendered from HermesResult.data by _render_result.
+    return "Query complete — see the data table below."
 
 
 def run_doctor(output_cb: Optional[Callable[[str], None]] = None) -> None:

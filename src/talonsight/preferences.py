@@ -50,6 +50,9 @@ class Preferences:
 
     # ── Last active DB connection (written by Streamlit; read by MCP server) ─
     last_connection: dict = field(default_factory=dict)
+    # Schema the user selected at connect time — used to scope allowlists and
+    # the Hermes prompt builder so the agent can ONLY see that schema's tables.
+    selected_schema: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
 

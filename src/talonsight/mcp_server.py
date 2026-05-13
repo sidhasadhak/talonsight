@@ -39,27 +39,48 @@ _schema_ctx = None
 _core_inst = None
 _allowed_schemas: set[str] | None = None
 _allowed_tables: set[str] | None = None
+_allowlist_schema: str | None = None   # schema active when allowlists were built
+
+
+def _get_selected_schema() -> str:
+    """Return the schema the user selected at connect time, or empty string."""
+    try:
+        from talonsight.preferences import Preferences
+        return Preferences.load().selected_schema or ""
+    except Exception:
+        return ""
 
 
 def _get_allowlists() -> tuple[set[str], set[str]]:
     """Return (allowed_schemas, allowed_tables) derived from the live database.
 
     Lazily built once and cached for the lifetime of the MCP server process.
+    Scoped to the schema the user selected at connect time — the agent cannot
+    query tables from other schemas in the same database file.
     This is what gets passed to validate_sql() so the agent can ONLY query
     tables that actually exist in the connected database — no access to
     system catalogs, pg_catalog, or tables outside the connection.
     """
-    global _allowed_schemas, _allowed_tables
+    global _allowed_schemas, _allowed_tables, _allowlist_schema
+    _sel = _get_selected_schema()
+    # Invalidate cache when the user has switched schemas between questions
+    if _allowed_schemas is not None and _allowlist_schema != _sel:
+        _allowed_schemas = None
+        _allowed_tables = None
     if _allowed_schemas is not None and _allowed_tables is not None:
         return _allowed_schemas, _allowed_tables
 
     ts = _get_core()
+    _schema_filter = (
+        f"AND table_schema = '{_sel}'"
+        if _sel
+        else "AND table_schema NOT IN ('information_schema', 'pg_catalog')"
+    )
     try:
         df = ts._db.execute_query(
-            "SELECT table_schema, table_name "
-            "FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('information_schema', 'pg_catalog') "
-            "AND table_type = 'BASE TABLE'"
+            f"SELECT table_schema, table_name "
+            f"FROM information_schema.tables "
+            f"WHERE table_type = 'BASE TABLE' {_schema_filter}"
         )
         schemas: set[str] = set()
         tables: set[str] = set()
@@ -69,11 +90,13 @@ def _get_allowlists() -> tuple[set[str], set[str]]:
                 tables.add(str(row["table_name"]).upper())
         _allowed_schemas = schemas
         _allowed_tables = tables
+        _allowlist_schema = _sel
     except Exception:
         # If we can't enumerate tables, fall back to no restriction
         # (safety patterns still block DDL/DML)
         _allowed_schemas = set()
         _allowed_tables = set()
+        _allowlist_schema = _sel
     return _allowed_schemas, _allowed_tables
 
 
@@ -148,6 +171,12 @@ def _get_schema(tables: list[str] = []) -> str:
     Columns with spaces or special characters are shown pre-quoted.
     """
     ts = _get_core()
+    _sel = _get_selected_schema()
+    _schema_filter = (
+        f"AND table_schema = '{_sel}'"
+        if _sel
+        else "AND table_schema NOT IN ('information_schema', 'pg_catalog')"
+    )
     try:
         tbl_filter = ""
         if tables:
@@ -156,7 +185,7 @@ def _get_schema(tables: list[str] = []) -> str:
         df = ts._db.execute_query(
             f"SELECT table_name, column_name, data_type "
             f"FROM information_schema.columns "
-            f"WHERE table_schema NOT IN ('information_schema', 'pg_catalog'){tbl_filter} "
+            f"WHERE 1=1 {_schema_filter}{tbl_filter} "
             f"ORDER BY table_name, ordinal_position"
         )
         if df is None or df.empty:

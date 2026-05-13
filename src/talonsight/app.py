@@ -839,9 +839,9 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
                     if step.error:
                         st.error(step.error)
 
-        # SQL used (agent mode)
+        # SQL used (agent mode) — always expanded so user can verify the query
         if r.sql:
-            with st.expander("🔍 SQL used", expanded=False):
+            with st.expander("🔍 SQL used", expanded=True):
                 st.code(r.sql, language="sql")
 
     # ── Classic mode decorations (skipped in agent mode) ─────────────
@@ -1337,6 +1337,9 @@ with st.sidebar:
                 import dataclasses
                 _prefs_save = Preferences.load()
                 _prefs_save.last_connection = dataclasses.asdict(config)
+                # Save the schema the user selected so the MCP server can
+                # scope its allowlists to only that schema's tables.
+                _prefs_save.selected_schema = schema_param or ""
                 # Save whichever LLM backend + model the user has selected right now
                 _llm_type_now = st.session_state.get("_sb_llm_type", "Ollama")
                 if _llm_type_now == "Ollama":
