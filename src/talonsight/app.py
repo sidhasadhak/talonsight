@@ -1327,11 +1327,29 @@ with st.sidebar:
             st.session_state.pending_question = None
             st.session_state.explore_questions = None  # None = pending generation
 
-            # ── Persist connection so talonsight-mcp (Hermes Analyst) can reconnect ──
+            # ── Persist connection + LLM model so Hermes Analyst always uses the
+            #    currently selected model (not whatever was saved at onboarding) ──
             try:
                 import dataclasses
                 _prefs_save = Preferences.load()
                 _prefs_save.last_connection = dataclasses.asdict(config)
+                # Save whichever LLM backend + model the user has selected right now
+                _llm_type_now = st.session_state.get("_sb_llm_type", "Ollama")
+                if _llm_type_now == "Ollama":
+                    _prefs_save.llm_provider = "ollama"
+                    _prefs_save.llm_model    = st.session_state.get("_sb_ollama_model", "")
+                    _prefs_save.llm_url      = st.session_state.get("_sb_ollama_url", "http://localhost:11434")
+                    _prefs_save.llm_api_key  = ""
+                elif _llm_type_now == "MLX (Apple Silicon)":
+                    _prefs_save.llm_provider = "mlx"
+                    _prefs_save.llm_model    = st.session_state.get("_sb_mlx_model", "")
+                    _prefs_save.llm_url      = st.session_state.get("_sb_mlx_url", "http://localhost:8080/v1")
+                    _prefs_save.llm_api_key  = ""
+                else:  # OpenAI-compatible API
+                    _prefs_save.llm_provider = "custom"
+                    _prefs_save.llm_model    = st.session_state.get("_sb_api_model", "")
+                    _prefs_save.llm_url      = st.session_state.get("_sb_api_url", "")
+                    _prefs_save.llm_api_key  = st.session_state.get("_sb_api_key", "")
                 _prefs_save.save()
             except Exception:
                 pass  # non-fatal — analyst mode will warn on first use
