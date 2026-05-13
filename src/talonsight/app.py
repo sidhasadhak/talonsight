@@ -1725,10 +1725,13 @@ with tab_ask:
         for _tn in _sg.get("nodes", []):
             _type_counts[_tn["type"]] = _type_counts.get(_tn["type"], 0) + 1
 
+        _tt_bg  = {"fact":"#f9731622","dimension":"#6366f122","bridge":"#10b98122","lookup":"#64748b22"}
+        _tt_fg  = {"fact":"#f97316","dimension":"#818cf8","bridge":"#34d399","lookup":"#94a3b8"}
+        _tt_bd  = {"fact":"#f9731644","dimension":"#6366f144","bridge":"#10b98144","lookup":"#64748b44"}
         _table_pills = " ".join(
-            f'<span style="background:{{"fact":"#f9731622","dimension":"#6366f122","bridge":"#10b98122","lookup":"#64748b22"}.get(t,"#33415522")};'
-            f'color:{{"fact":"#f97316","dimension":"#818cf8","bridge":"#34d399","lookup":"#94a3b8"}.get(t,"#94a3b8")};'
-            f'border:1px solid {{"fact":"#f9731644","dimension":"#6366f144","bridge":"#10b98144","lookup":"#64748b44"}.get(t,"#33415544")};'
+            f'<span style="background:{_tt_bg.get(t,"#33415522")};'
+            f'color:{_tt_fg.get(t,"#94a3b8")};'
+            f'border:1px solid {_tt_bd.get(t,"#33415544")};'
             f'padding:2px 9px;border-radius:12px;font-size:.72rem;font-weight:600">'
             f'{t} {n}</span>'
             for t, n in sorted(_type_counts.items())
